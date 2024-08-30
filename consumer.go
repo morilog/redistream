@@ -40,6 +40,17 @@ type ConsumerGroupOptions struct {
 	ReturnErrors bool
 }
 
+// DefaultConsumerGroupOptions is the default options
+// Topic and GroupID is empty and should be set on usage
+var DefaultConsumerGroupOptions = &ConsumerGroupOptions{
+	BlockDuration:                  time.Millisecond * 10,
+	MessagesBufferSize:             100,
+	InitialOffset:                  "0",
+	ReclaimPendingMessagesInterval: time.Second * 5,
+	ReturnErrors:                   false,
+}
+
+// ConsumerGroup is a consumer group of redis
 type ConsumerGroup struct {
 	opts     *ConsumerGroupOptions
 	rdb      *redis.Client
@@ -50,15 +61,32 @@ type ConsumerGroup struct {
 	errors   chan error
 }
 
-func NewConsumerGroup(rdb *redis.Client, opts *ConsumerGroupOptions) *ConsumerGroup {
+// NewConsumerGroup creates a new consumer group
+// It uses DefaultConsumerGroupOptions when not any opts provided
+func NewConsumerGroup(rdb *redis.Client, opts ...*ConsumerGroupOptions) (*ConsumerGroup, error) {
+	usedOpts := DefaultConsumerGroupOptions
+	if len(opts) == 1 {
+		usedOpts = opts[0]
+	}
+
+	if usedOpts.GroupID == "" {
+		return nil, errors.New("group id is required")
+	}
+
+	if usedOpts.Topic == "" {
+		return nil, errors.New("topic is required")
+	}
+
 	return &ConsumerGroup{
-		opts:     opts,
+		opts:     usedOpts,
 		rdb:      rdb,
 		wg:       &sync.WaitGroup{},
-		messages: make(chan Message, opts.MessagesBufferSize),
-		errors:   make(chan error, opts.MessagesBufferSize),
-	}
+		messages: make(chan Message, usedOpts.MessagesBufferSize),
+		errors:   make(chan error, usedOpts.MessagesBufferSize),
+	}, nil
 }
+
+// Consume consumes messages from the topic
 
 func (c *ConsumerGroup) Consume(ctx context.Context) (<-chan Message, error) {
 	// check the group exists or create it
@@ -67,6 +95,9 @@ func (c *ConsumerGroup) Consume(ctx context.Context) (<-chan Message, error) {
 		return nil, err
 	}
 
+	// the consumer group starts to read from stream periodically
+	// It reads pending messages and reclaim them
+	// It closes when the context is done
 	c.once.Do(func() {
 		c.wg.Add(1)
 		go func() {
@@ -94,6 +125,8 @@ func (c *ConsumerGroup) Consume(ctx context.Context) (<-chan Message, error) {
 		}()
 	})
 
+	// And return the messages channel
+	// To process by higher level user
 	return c.messages, nil
 }
 
@@ -186,10 +219,15 @@ func (c *ConsumerGroup) readStream(ctx context.Context) error {
 	return nil
 }
 
+// Ack acknowledges message
+// Every message should be acknowledged after processing
+// To avoid double process
 func (c *ConsumerGroup) Ack(ctx context.Context, m Message) error {
 	return c.rdb.XAck(ctx, c.opts.Topic, c.opts.GroupID, m.ID).Err()
 }
 
+// Close closes the consumer group
+// and its internal channels
 func (c *ConsumerGroup) Close() error {
 	<-c.closed
 	c.wg.Wait()

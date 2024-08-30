@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bxcodec/faker"
+	"github.com/go-faker/faker/v4"
 	"github.com/morilog/redistream"
 	"github.com/redis/go-redis/v9"
 )
@@ -31,7 +31,11 @@ func main() {
 		ReturnErrors:                   true,
 	}
 
-	consumer := redistream.NewConsumerGroup(rdb, opts)
+	consumer, err := redistream.NewConsumerGroup(rdb, opts)
+	if err != nil {
+		slog.Error(err.Error())
+		os.Exit(1)
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
 
